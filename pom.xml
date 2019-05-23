@@ -7,7 +7,7 @@
   <groupId>com.ionic.cloudstorage</groupId>
   <artifactId>IonicCloudCopyTool</artifactId>
   <packaging>jar</packaging>
-  <version>0.3.0</version>
+  <version>0.4.0</version>
 
   <name>IonicCloudCopyTool</name>
 
@@ -86,13 +86,18 @@
 
   <dependencies>
     <dependency>
-      <groupId>com.ionicsecurity.ipcs.awss3</groupId>
-      <artifactId>ionics3</artifactId>
-      <version>0.9.0</version>
+      <groupId>com.ionic.cloudstorage</groupId>
+      <artifactId>ionic-for-aws-java-sdk-s3</artifactId>
+      <version>1.0.0</version>
     </dependency>
     <dependency>
-      <groupId>com.ionicsecurity.ipcs.google</groupId>
-      <artifactId>ionicgcs</artifactId>
+      <groupId>com.ionic.cloudstorage</groupId>
+      <artifactId>ionic-for-google-cloud-storage</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.ionic.cloudstorage</groupId>
+      <artifactId>ionic-for-azure-storage-sdk</artifactId>
       <version>0.9.1</version>
     </dependency>
   </dependencies>

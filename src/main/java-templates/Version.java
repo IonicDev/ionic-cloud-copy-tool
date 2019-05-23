@@ -1,4 +1,4 @@
-package com.ionicsecurity.examples;
+package com.ionic.cloudstorage.icct;
 
 public final class Version {
 
