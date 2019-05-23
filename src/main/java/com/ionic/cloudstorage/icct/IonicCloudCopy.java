@@ -5,18 +5,6 @@
 
 package com.ionic.cloudstorage.icct;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
-import java.io.IOException;
-import java.io.File;
-import java.io.InputStream;
-import java.io.ByteArrayInputStream;
-import java.net.ConnectException;
-import java.nio.file.Files;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.ArrayList;
-import java.util.Arrays;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.regions.DefaultAwsRegionProviderChain;
@@ -26,28 +14,51 @@ import com.amazonaws.SdkClientException;
 import com.amazonaws.services.s3.AmazonS3Encryption;
 import com.amazonaws.services.s3.AmazonS3URI;
 import com.amazonaws.services.s3.model.AmazonS3Exception;
-import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.ObjectMetadata;
+import com.amazonaws.services.s3.model.S3Object;
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
-import com.google.cloud.storage.BlobInfo;
 import com.google.cloud.storage.Blob;
 import com.google.cloud.storage.BlobId;
+import com.google.cloud.storage.BlobInfo;
 import com.google.cloud.storage.Storage;
-import com.google.cloud.storage.StorageException;
 import com.google.cloud.storage.StorageOptions;
-import com.ionicsecurity.ipcs.awss3.IonicEncryptionMaterialsProvider;
-import com.ionicsecurity.ipcs.awss3.IonicS3EncryptionClient;
-import com.ionicsecurity.ipcs.awss3.IonicS3EncryptionClientBuilder;
-import com.ionicsecurity.ipcs.google.GoogleIonicStorage;
-import com.ionicsecurity.examples.Version;
-import com.ionic.sdk.device.profile.persistor.DeviceProfilePersistorPlainText;
+import com.ionic.cloudstorage.awss3.IonicEncryptionMaterialsProvider;
+import com.ionic.cloudstorage.awss3.IonicS3EncryptionClient;
+import com.ionic.cloudstorage.awss3.IonicS3EncryptionClientBuilder;
+import com.ionic.cloudstorage.azurestorage.AzureIonicStorage;
+import com.ionic.cloudstorage.gcs.GoogleIonicStorage;
 import com.ionic.sdk.agent.Agent;
-import com.ionic.sdk.agent.key.KeyAttributesMap;
 import com.ionic.sdk.agent.data.MetadataMap;
-import com.ionic.sdk.error.IonicException;
+import com.ionic.sdk.agent.key.KeyAttributesMap;
 import com.ionic.sdk.agent.request.createkey.CreateKeysRequest;
 import com.ionic.sdk.agent.request.getkey.GetKeysResponse;
+import com.ionic.sdk.device.profile.persistor.DeviceProfilePersistorPlainText;
+import com.ionic.sdk.error.IonicException;
+import com.microsoft.azure.keyvault.cryptography.SymmetricKey;
+import com.microsoft.azure.storage.blob.BlobEncryptionPolicy;
+import com.microsoft.azure.storage.blob.BlobRequestOptions;
+import com.microsoft.azure.storage.blob.CloudBlockBlob;
+import com.microsoft.azure.storage.blob.CloudBlobClient;
+import com.microsoft.azure.storage.blob.CloudBlobContainer;
+import com.microsoft.azure.storage.CloudStorageAccount;
+import com.microsoft.azure.storage.StorageCredentials;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.InputStream;
+import java.io.IOException;
+import java.lang.NullPointerException;
+import java.net.URISyntaxException;
+import java.net.ConnectException;
+import java.nio.file.Files;
+import java.security.InvalidKeyException;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Arrays;
 import javax.xml.bind.DatatypeConverter;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 
 public class IonicCloudCopy {
     public static void usage() {
@@ -59,11 +70,13 @@ public class IonicCloudCopy {
         System.out.println("  string:'Text of choice.'");
         System.out.println("  s3://s3bucket/path/to/object");
         System.out.println("  gs://gcsbucket/path/to/object");
+        System.out.println("  az:azureContainer/path/to/blob");
         System.out.println("Destinations:");
         System.out.println("  file/system/path");
         System.out.println("  stdout:");
         System.out.println("  s3://s3bucket/path/to/object");
         System.out.println("  gs://gcsbucket/path/to/object");
+        System.out.println("  az:azureContainer/path/to/blob");
         System.out.println("-a only valid for local or string sources");
         System.out.println("Single Argument Commands:");
         System.out.println("  version");
@@ -74,6 +87,7 @@ public class IonicCloudCopy {
     enum LocationType {
         GCS, // Source, Destination
         S3, // Source, Destination
+        AZURE, // Source, Destination
         LOCAL, // Source, Destination
         STRING, // Source
         STDOUT; // Destination
@@ -107,6 +121,8 @@ public class IonicCloudCopy {
     private static DeviceProfilePersistorPlainText gPersistor;
     private static IonicS3EncryptionClient gs3;
     private static GoogleIonicStorage gStorage;
+    private static AzureIonicStorage gIonicAzure;
+    private static CloudBlobClient gAzureClient;
     private static IonicEncryptionMaterialsProvider gIemp;
 
     public static void main(String[] args) {
@@ -162,6 +178,8 @@ public class IonicCloudCopy {
             return S3Location(source);
         } else if (source.startsWith("gs://")) {
             return GSLocation(source);
+        } else if (source.startsWith("az:")) {
+            return AZLocation(source);
         } else {
             Location ret = new Location();
             ret.locType = LocationType.LOCAL;
@@ -184,6 +202,8 @@ public class IonicCloudCopy {
             return S3Location(destination);
         } else if (destination.startsWith("gs://")) {
             return GSLocation(destination);
+        } else if (destination.startsWith("az:")) {
+            return AZLocation(destination);
         } else {
             Location ret = new Location();
             ret.locType = LocationType.LOCAL;
@@ -240,10 +260,7 @@ public class IonicCloudCopy {
                     getS3().setRegion(defaultRegion);
                 }
                 return ret;
-            } catch (AmazonS3Exception e) {
-                System.err.println(e.getLocalizedMessage());
-                System.exit(1);
-            } catch (IOException e) {
+            } catch (AmazonS3Exception|IOException e) {
                 System.err.println(e.getLocalizedMessage());
                 System.exit(1);
             }
@@ -252,7 +269,23 @@ public class IonicCloudCopy {
                 GoogleIonicStorage.IonicKeyBytesPair pair =
                         getGCS().readAllBytesAndKey(source.bucket, source.object);
                 return new IonicKeyBytesPair(pair.getKey(), pair.getByteArray());
-            } catch (StorageException e) {
+            } catch (com.google.cloud.storage.StorageException e) {
+                System.err.println(e.getLocalizedMessage());
+                System.exit(1);
+            }
+        } else if (source.locType == LocationType.AZURE) {
+            try {
+                CloudBlobContainer container = getAzureClient().getContainerReference(source.bucket);
+                CloudBlockBlob blob = container.getBlockBlobReference(source.object);
+                AzureIonicStorage.KeyResolver keyResolver = getAzureIonicStorage().getKeyResolver();
+                BlobEncryptionPolicy downloadPolicy = new BlobEncryptionPolicy(null, keyResolver);
+                BlobRequestOptions options = new BlobRequestOptions();
+                options.setEncryptionPolicy(downloadPolicy);
+                ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+                blob.download(byteArrayOutputStream, null, options, null);
+                GetKeysResponse.Key ionicKey = keyResolver.getKey();
+                return new IonicKeyBytesPair(ionicKey, byteArrayOutputStream.toByteArray());
+            } catch (com.microsoft.azure.storage.StorageException|URISyntaxException e) {
                 System.err.println(e.getLocalizedMessage());
                 System.exit(1);
             }
@@ -298,6 +331,19 @@ public class IonicCloudCopy {
                     BlobInfo.newBuilder(BlobId.of(destination.bucket, destination.object))
                             .setContentType("application/octet-stream").build();
             getGCS().create(blobInfo, data, new CreateKeysRequest.Key("", 1, attributes));
+        } else if (destination.locType == LocationType.AZURE) {
+            try {
+                CloudBlobContainer container = getAzureClient().getContainerReference(destination.bucket);
+                CloudBlockBlob blob = container.getBlockBlobReference(destination.object);
+                BlobEncryptionPolicy policy = new BlobEncryptionPolicy(getAzureIonicStorage().
+                  create(new CreateKeysRequest.Key("", 1, attributes)), null);
+                BlobRequestOptions options = new BlobRequestOptions();
+                options.setEncryptionPolicy(policy);
+                blob.uploadFromByteArray(data, 0, data.length, null, options, null);
+            } catch (com.microsoft.azure.storage.StorageException|IonicException|IOException|URISyntaxException e) {
+                System.err.println(e.getLocalizedMessage());
+                System.exit(1);
+            }
         } else if (destination.locType == LocationType.LOCAL) {
             try {
                 FileUtils.writeByteArrayToFile(destination.file, data);
@@ -345,6 +391,32 @@ public class IonicCloudCopy {
         if (getGCS().get(component[0], Storage.BucketGetOption.fields()) == null) {
             System.err.println("Bucket " + component[0]
                     + " does not exist or user lacks adequate permission access it.");
+            System.exit(1);
+        }
+        ret.bucket = component[0];
+        ret.object = component[1];
+        return ret;
+    }
+
+    public static Location AZLocation(String uri) {
+        if (checkAzureCredentials() != null) {
+            System.out.println(
+            "Service Azure Storage is not configured. Run command config for details.");
+            System.exit(1);
+        }
+        Location ret = new Location();
+        ret.locType = LocationType.AZURE;
+        String sub = uri.substring(3, uri.length());
+        String[] component = sub.split("/", 2);
+        if (component.length != 2) {
+            System.err.println("Invalid Azure uri: " + uri +
+                "\n Uri must contain a Container followed by a '/' followed by a Blob name.");
+            System.exit(1);
+        }
+        try {
+            getAzureClient().getContainerReference(component[0]);
+        } catch (com.microsoft.azure.storage.StorageException|URISyntaxException e) {
+            System.err.println(e.getMessage());
             System.exit(1);
         }
         ret.bucket = component[0];
@@ -403,7 +475,7 @@ public class IonicCloudCopy {
     public static IonicEncryptionMaterialsProvider getIemp() {
         if (gIemp == null) {
             gIemp = new IonicEncryptionMaterialsProvider();
-            IonicEncryptionMaterialsProvider.setIonicMetadataMap(getMetadataMap());
+            gIemp.setIonicMetadataMap(getMetadataMap());
             try {
                 gIemp.setPersistor(getPersistor());
             } catch (IonicException e) {
@@ -420,6 +492,32 @@ public class IonicCloudCopy {
                     .withEncryptionMaterials(getIemp()).build();
         }
         return gs3;
+    }
+
+    private static CloudBlobClient getAzureClient() {
+        if (gAzureClient == null) {
+            try {
+                CloudStorageAccount account = new CloudStorageAccount(getAzureStorageCredentials(), true);
+                gAzureClient = account.createCloudBlobClient();
+            } catch (Exception e) {
+                System.err.println(e.getMessage());
+                System.exit(1);
+            }
+        }
+        return gAzureClient;
+    }
+
+    private static AzureIonicStorage getAzureIonicStorage()  {
+        if (gIonicAzure == null) {
+            try {
+                gIonicAzure = new AzureIonicStorage(getPersistor());
+            } catch (IonicException e) {
+                System.err.println(e.getMessage());
+                System.exit(1);
+            }
+            gIonicAzure.setIonicMetadataMap(getMetadataMap());
+        }
+        return gIonicAzure;
     }
 
     // Configuration Checks
@@ -477,6 +575,30 @@ public class IonicCloudCopy {
         return null;
     }
 
+    public static StorageCredentials getAzureStorageCredentials() throws
+    InvalidKeyException, SecurityException, IllegalArgumentException,
+    com.microsoft.azure.storage.StorageException {
+        String account = System.getenv("AZURE_STORAGE_ACCOUNT");
+        String key = System.getenv("AZURE_STORAGE_ACCESS_KEY");
+        if (account == null ) {
+            throw new IllegalArgumentException("AZURE_STORAGE_ACCOUNT is not present in environment.");
+        }
+        if (key == null) {
+            throw new IllegalArgumentException("AZURE_STORAGE_ACCESS_KEY is not present in environment.");
+        }
+        String creds = "AccountName=" + account + ";" + "AccountKey=" + key;
+        return StorageCredentials.tryParseCredentials(creds);
+    }
+
+    public static String checkAzureCredentials() {
+        try {
+            getAzureStorageCredentials();
+        } catch (Exception e) {
+            return e.getLocalizedMessage();
+        }
+        return null;
+    }
+
     public static int configurationCheck() {
         int exitCode = 0;
 
@@ -484,6 +606,7 @@ public class IonicCloudCopy {
         String awsCredsCheckResult = checkAWSCredentialsConfiguration();
         String awsRegionCheckResult = checkAWSRegionConfiguration();
         String googleCheckResult = checkGoogleCredentials();
+        String azureCheckResult = checkAzureCredentials();
 
         if (ionicCheckResult != null) {
             System.out.println("Ionic Configuration Status: ERROR:");
@@ -516,6 +639,15 @@ public class IonicCloudCopy {
         } else {
             System.out.println("Google Credential Configuration: CONFIGURED");
         }
+
+        if (azureCheckResult != null) {
+            System.out.println("Azure Credential Configuration: ERROR:");
+            System.out.println('\t' + azureCheckResult + '\n');
+            exitCode = 1;
+        } else {
+            System.out.println("Azure Credential Configuration: CONFIGURED");
+        }
+
         return exitCode;
     }
 
