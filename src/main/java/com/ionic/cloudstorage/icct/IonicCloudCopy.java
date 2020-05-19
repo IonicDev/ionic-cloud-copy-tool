@@ -22,10 +22,9 @@ import com.google.cloud.storage.BlobId;
 import com.google.cloud.storage.BlobInfo;
 import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageOptions;
-import com.ionic.cloudstorage.awss3.IonicEncryptionMaterialsProvider;
 import com.ionic.cloudstorage.awss3.IonicS3EncryptionClient;
 import com.ionic.cloudstorage.awss3.IonicS3EncryptionClientBuilder;
-import com.ionic.cloudstorage.azurestorage.AzureIonicStorage;
+import com.ionic.cloudstorage.azurestorage.IonicKeyResolverFactory;
 import com.ionic.cloudstorage.gcs.GoogleIonicStorage;
 import com.ionic.sdk.agent.Agent;
 import com.ionic.sdk.agent.data.MetadataMap;
@@ -108,22 +107,37 @@ public class IonicCloudCopy {
     /* This code uses a PlaintextPersistor for demonstration purposes. For
      * production code it is recomended to use a more secure Persistor type.
      */
-    public static DeviceProfilePersistorPlainText getPersistor() throws IonicException {
-        if (gPersistor == null) {
-            // Load a plain-text device profile (SEP) from disk
-            gPersistor = new DeviceProfilePersistorPlainText();
-            gPersistor.setFilePath(gProfilePath);
+
+
+    private static Agent getAgentUnchecked() throws IonicException {
+        if (gIonicAgent == null) {
+            DeviceProfilePersistorPlainText persistor = new DeviceProfilePersistorPlainText();
+            persistor.setFilePath(gProfilePath);
+            Agent agent = new Agent();
+            agent.initialize(persistor);
+            agent.setMetadata(getMetadataMap());
+            gIonicAgent = agent;
         }
-        return gPersistor;
+        return gIonicAgent;
+    }
+
+    private static Agent getAgent() {
+        try {
+            return getAgentUnchecked();
+        } catch (IonicException e) {
+            System.err.println("Error loading persistor: " + e.getMessage());
+            System.exit(1);
+        }
+        return null;
     }
 
     private static KeyAttributesMap attributes;
+    private static Agent gIonicAgent;
     private static DeviceProfilePersistorPlainText gPersistor;
     private static IonicS3EncryptionClient gs3;
     private static GoogleIonicStorage gStorage;
-    private static AzureIonicStorage gIonicAzure;
+    private static IonicKeyResolverFactory gIonicAzureResolver;
     private static CloudBlobClient gAzureClient;
-    private static IonicEncryptionMaterialsProvider gIemp;
 
     public static void main(String[] args) {
 
@@ -277,7 +291,8 @@ public class IonicCloudCopy {
             try {
                 CloudBlobContainer container = getAzureClient().getContainerReference(source.bucket);
                 CloudBlockBlob blob = container.getBlockBlobReference(source.object);
-                AzureIonicStorage.KeyResolver keyResolver = getAzureIonicStorage().getKeyResolver();
+                IonicKeyResolverFactory.IonicKeyResolver keyResolver =
+                        getIonicKeyResolverFactory().createKeyResolver();
                 BlobEncryptionPolicy downloadPolicy = new BlobEncryptionPolicy(null, keyResolver);
                 BlobRequestOptions options = new BlobRequestOptions();
                 options.setEncryptionPolicy(downloadPolicy);
@@ -335,7 +350,7 @@ public class IonicCloudCopy {
             try {
                 CloudBlobContainer container = getAzureClient().getContainerReference(destination.bucket);
                 CloudBlockBlob blob = container.getBlockBlobReference(destination.object);
-                BlobEncryptionPolicy policy = new BlobEncryptionPolicy(getAzureIonicStorage().
+                BlobEncryptionPolicy policy = new BlobEncryptionPolicy(getIonicKeyResolverFactory().
                   create(new CreateKeysRequest.Key("", 1, attributes)), null);
                 BlobRequestOptions options = new BlobRequestOptions();
                 options.setEncryptionPolicy(policy);
@@ -460,36 +475,16 @@ public class IonicCloudCopy {
 
     public static GoogleIonicStorage getGCS() {
         if (gStorage == null) {
-            try {
-                gStorage = new GoogleIonicStorage(getPersistor(),
-                        StorageOptions.getDefaultInstance().getService());
-                gStorage.setIonicMetadataMap(getMetadataMap());
-            } catch (IonicException e) {
-                System.err.println("Ionic Persistor not found at: " + gProfilePath);
-                System.exit(1);
-            }
+            gStorage = new GoogleIonicStorage(getAgent(),StorageOptions.getDefaultInstance()
+                    .getService());
         }
         return gStorage;
-    }
-
-    public static IonicEncryptionMaterialsProvider getIemp() {
-        if (gIemp == null) {
-            gIemp = new IonicEncryptionMaterialsProvider();
-            gIemp.setIonicMetadataMap(getMetadataMap());
-            try {
-                gIemp.setPersistor(getPersistor());
-            } catch (IonicException e) {
-                System.err.println("Ionic Persistor not found at: " + gProfilePath);
-                System.exit(1);
-            }
-        }
-        return gIemp;
     }
 
     public static IonicS3EncryptionClient getS3() {
         if (gs3 == null) {
             gs3 = (IonicS3EncryptionClient) IonicS3EncryptionClientBuilder.standard()
-                    .withEncryptionMaterials(getIemp()).build();
+                    .withIonicAgent(getAgent()).buildIonic();
         }
         return gs3;
     }
@@ -507,40 +502,27 @@ public class IonicCloudCopy {
         return gAzureClient;
     }
 
-    private static AzureIonicStorage getAzureIonicStorage()  {
-        if (gIonicAzure == null) {
-            try {
-                gIonicAzure = new AzureIonicStorage(getPersistor());
-            } catch (IonicException e) {
-                System.err.println(e.getMessage());
-                System.exit(1);
-            }
-            gIonicAzure.setIonicMetadataMap(getMetadataMap());
+    private static IonicKeyResolverFactory getIonicKeyResolverFactory()  {
+        if (gIonicAzureResolver == null) {
+            gIonicAzureResolver = new IonicKeyResolverFactory(getAgent());
         }
-        return gIonicAzure;
+        return gIonicAzureResolver;
     }
 
     // Configuration Checks
 
 
     public static String checkIonicConfiguration() {
-        Agent agent = null;
         try {
-            agent = new Agent(getPersistor());
+            Agent agent = getAgentUnchecked();
+            agent.getKey("").getFirstKey();
         } catch (IonicException e) {
-            return e.getMessage();
-        }
-        if (agent != null) {
-            try {
-                agent.getKey("").getFirstKey();
-            } catch (IonicException e) {
-                if (e.getReturnCode() == 40024) {
-                    return null;
-                } else if (e.getReturnCode() == 40021) {
-                    return "Issue loading persistor at: " + gProfilePath;
-                } else {
-                    return e.getMessage();
-                }
+            if (e.getReturnCode() == 40024) {
+                return null;
+            } else if (e.getReturnCode() == 40021) {
+                return "Issue loading persistor at: " + gProfilePath;
+            } else {
+                return e.getMessage();
             }
         }
         return null;

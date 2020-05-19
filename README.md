@@ -25,7 +25,7 @@ Either use a plaintext persistor located at $HOME/.ionicsecurity/profiles.pt or 
 `AWS_SECRET_ACCESS_KEY=your_secret_access_key`
 `AWS_REGION=your_default_amazon_region`
 
-Details on setting up and configuring Ionic for AWS S3 can be found at [here](https://dev.ionic.com/integrations/aws-s3/setup).
+Details on setting up and configuring Ionic for AWS S3 can be found at [here](https://dev.ionic.com/integrations/idts-aws-s3-sdk/tasks/setup).
 
 ### GCS Setup
 
@@ -33,7 +33,7 @@ Details on setting up and configuring Ionic for AWS S3 can be found at [here](ht
 
 `GOOGLE_APPLICATION_CREDENTIALS=path/to/a/google/serviceAccount.json`
 
-Details on setting up and configuring Ionic for GCS can be found [here](https://dev.ionic.com/integrations/ipcs-gcs/setup).
+Details on setting up and configuring Ionic for GCS can be found [here](https://dev.ionic.com/integrations/idts-gcs-sdk/tasks/setup).
 
 ### Azure Setup
 
